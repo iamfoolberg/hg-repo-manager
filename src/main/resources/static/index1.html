@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kohaku & ModelScope Manager</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #4CAF50;
+            --accent-hover: #45a049;
+            --danger-color: #f44336;
+            --border-color: #444;
+        }
+        body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        
+        h1, h2 { margin-top: 0; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        
+        .card { background-color: var(--card-bg); padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input, select { width: 100%; padding: 10px; background-color: #3d3d3d; border: 1px solid var(--border-color); color: white; border-radius: 4px; box-sizing: border-box; }
+        
+        button { background-color: var(--accent-color); color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background 0.3s; }
+        button:hover { background-color: var(--accent-hover); }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        
+        .progress-container { margin-top: 15px; background-color: #3d3d3d; border-radius: 4px; overflow: hidden; height: 20px; display: none; }
+        .progress-bar { height: 100%; background-color: var(--accent-color); width: 0%; transition: width 0.3s; }
+        
+        .log-console { background-color: #000; color: #0f0; font-family: monospace; padding: 10px; height: 150px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; font-size: 12px; margin-top: 10px; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; }
+
+        .row { display: flex; gap: 20px; }
+        .col { flex: 1; }
+
+        .api-info { font-size: 12px; color: #888; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Kohaku 模型管理器</h1>
+
+    <!-- 配置区域 -->
+    <div class="card">
+        <h2>系统配置</h2>
+        <div class="form-group">
+            <label>KohakuHub API 基础URL</label>
+            <input type="text" id="kohakuApiUrl" value="http://192.168.2.80:48888" placeholder="例如: http://192.168.2.80:48888">
+            <div class="api-info">上传时会自动追加 /api/models/{model_name} 路径</div>
+        </div>
+        <div class="form-group">
+            <label>API Token</label>
+            <!-- 这里设置了你提供的默认 Token -->
+            <input type="text" id="kohakuToken" value="00fac1565440f8d5dfe175927f3bfc69825cb295ebcf8d3d780503e6056f7f13" placeholder="输入 Token...">
+            <div class="api-info">用于上传到 KohakuHub 的认证 Token</div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- 下载区域 -->
+        <div class="col card">
+            <h2>从 ModelScope 下载</h2>
+            <div class="form-group">
+                <label>模型名称 (ModelScope格式)</label>
+                <!-- 这里设置了默认模型 Qwen/Qwen2.5-0.5B-Instruct -->
+                <input type="text" id="msModelName" value="Qwen/Qwen2.5-0.5B-Instruct" placeholder="例如: Qwen/Qwen2.5-0.5B-Instruct">
+            </div>
+            <button onclick="startDownload()">开始下载</button>
+            
+            <div class="progress-container" id="dlProgressBox">
+                <div class="progress-bar" id="dlProgressBar"></div>
+            </div>
+            <div id="dlStatus" style="margin-top:5px; font-size:14px;"></div>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="col card">
+            <h2>上传到 KohakuHub</h2>
+            <div class="form-group">
+                <label>选择本地缓存模型</label>
+                <select id="localModelSelect">
+                    <option value="">加载中...</option>
+                </select>
+            </div>
+            <button onclick="startUpload()">开始上传</button>
+
+            <div class="progress-container" id="ulProgressBox">
+                <div class="progress-bar" id="ulProgressBar"></div>
+            </div>
+            <div id="ulStatus" style="margin-top:5px; font-size:14px;"></div>
+        </div>
+    </div>
+
+    <!-- 日志区域 -->
+    <div class="card">
+        <h2>系统日志</h2>
+        <div class="log-console" id="logConsole"></div>
+        <button onclick="clearLogs()" style="margin-top:10px; font-size:12px;">清空界面日志</button>
+    </div>
+</div>
+
+<script>
+    let currentTasks = {};
+    let refreshModelsInterval;
+    const API_BASE = '/api';
+
+    document.addEventListener('DOMContentLoaded', () => {
+        setInterval(checkTasks, 1000);
+        loadLocalModels();
+        refreshModelsInterval = setInterval(loadLocalModels, 10000);
+        
+        // 恢复保存的设置
+        const savedUrl = localStorage.getItem('kohakuApiUrl');
+        if(savedUrl) document.getElementById('kohakuApiUrl').value = savedUrl;
+        
+        const savedToken = localStorage.getItem('kohakuToken');
+        // 如果本地存储有Token，覆盖默认值（防止旧Token残留）
+        if(savedToken) document.getElementById('kohakuToken').value = savedToken;
+    });
+
+    // 监听输入变化并保存到 LocalStorage
+    document.getElementById('kohakuApiUrl').addEventListener('change', function() {
+        localStorage.setItem('kohakuApiUrl', this.value);
+    });
+    document.getElementById('kohakuToken').addEventListener('change', function() {
+        localStorage.setItem('kohakuToken', this.value);
+    });
+
+    function log(message, type = 'INFO') {
+        const consoleEl = document.getElementById('logConsole');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        const time = new Date().toLocaleTimeString();
+        entry.innerText = `[${time}] [${type}] ${message}`;
+        consoleEl.appendChild(entry);
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function clearLogs() {
+        document.getElementById('logConsole').innerHTML = '';
+    }
+
+    // --- 下载功能 ---
+    async function startDownload() {
+        const modelName = document.getElementById('msModelName').value.trim();
+        if (!modelName) return alert('请输入模型名称');
+
+        log(`启动下载任务: ${modelName}`);
+        
+        try {
+            const res = await fetch(`${API_BASE}/download/start`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ modelName })
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                currentTasks[data.taskId] = { type: 'DOWNLOAD', uiId: 'dl' };
+                log(`下载任务已启动，ID: ${data.taskId}`);
+            } else {
+                throw new Error('下载启动失败');
+            }
+        } catch (error) {
+            log(error.message, 'ERROR');
+            alert('下载启动失败: ' + error.message);
+        }
+    }
+
+    // --- 上传功能 ---
+    async function loadLocalModels() {
+        try {
+            const res = await fetch(`${API_BASE}/models/local`);
+            if (res.ok) {
+                const models = await res.json();
+                const select = document.getElementById('localModelSelect');
+                const currentVal = select.value;
+                select.innerHTML = '';
+                
+                if(models.length === 0) {
+                    select.innerHTML = '<option value="">暂无缓存模型</option>';
+                } else {
+                    models.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        opt.innerText = m;
+                        select.appendChild(opt);
+                    });
+                    
+                    if(models.includes(currentVal)) select.value = currentVal;
+                }
+            }
+        } catch (error) {
+            log('加载本地模型列表失败', 'ERROR');
+        }
+    }
+
+    async function startUpload() {
+        const modelName = document.getElementById('localModelSelect').value;
+        const apiBaseUrl = document.getElementById('kohakuApiUrl').value.trim();
+        const token = document.getElementById('kohakuToken').value.trim();
+
+        if (!modelName) return alert('请选择模型');
+        if (!apiBaseUrl) return alert('请填写 API 基础URL');
+
+        log(`启动上传任务: ${modelName} -> ${apiBaseUrl}`);
+        
+        try {
+            const res = await fetch(`${API_BASE}/upload/start`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    modelName: modelName,
+                    apiUrl: apiBaseUrl,
+                    token: token
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                currentTasks[data.taskId] = { type: 'UPLOAD', uiId: 'ul' };
+                log(`上传任务已启动，ID: ${data.taskId}`);
+            } else {
+                throw new Error('上传启动失败');
+            }
+        } catch (error) {
+            log(error.message, 'ERROR');
+            alert('上传启动失败: ' + error.message);
+        }
+    }
+
+    // --- 状态轮询 ---
+    async function checkTasks() {
+        try {
+            const res = await fetch(`${API_BASE}/tasks`);
+            if (!res.ok) return;
+
+            const tasks = await res.json();
+            
+            for (const [id, task] of Object.entries(tasks)) {
+                let uiId = 'dl';
+                if (task.type === 'UPLOAD') uiId = 'ul';
+
+                const bar = document.getElementById(`${uiId}ProgressBar`);
+                const box = document.getElementById(`${uiId}ProgressBox`);
+                const statusText = document.getElementById(`${uiId}Status`);
+
+                if (task.status === 'RUNNING' || task.status === 'COMPLETED' || task.status === 'ERROR') {
+                    box.style.display = 'block';
+                    bar.style.width = `${task.progress}%`;
+                    
+                    let msg = task.message;
+                    if (task.currentFile) msg += ` (${task.currentFile})`;
+                    statusText.innerText = msg;
+                    
+                    if (task.status === 'ERROR') {
+                        bar.style.backgroundColor = 'var(--danger-color)';
+                        log(`${task.type} 失败: ${task.message}`, 'ERROR');
+                    } else if (task.status === 'COMPLETED') {
+                        bar.style.backgroundColor = '#2196F3';
+                        log(`${task.type} 完成: ${task.message}`);
+                    }
+                }
+            }
+        } catch (error) {
+            // 忽略轮询错误，避免刷屏
+        }
+    }
+</script>
+
+</body>
+</html>

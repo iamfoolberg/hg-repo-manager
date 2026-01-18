@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kohaku & ModelScope Manager</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #4CAF50;
+            --accent-hover: #45a049;
+            --danger-color: #f44336;
+            --border-color: #444;
+            --panel-bg: #222;
+        }
+        body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        
+        h1, h2 { margin-top: 0; border-bottom: 1px solid var(--border-color); padding-bottom: 10px; }
+        
+        .card { background-color: var(--card-bg); padding: 20px; margin-bottom: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        
+        .form-group { margin-bottom: 10px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; color: #bbb; font-size: 13px; }
+        input, select { width: 100%; padding: 8px; background-color: #3d3d3d; border: 1px solid var(--border-color); color: white; border-radius: 4px; box-sizing: border-box; font-family: monospace; }
+        input[type="number"] { width: 48%; display: inline-block; }
+        
+        button { background-color: var(--accent-color); color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 16px; transition: background 0.3s; font-weight: bold; width: 100%; margin-top: 10px;}
+        button:hover { background-color: var(--accent-hover); }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        
+        .progress-wrapper { margin-top: 10px; display: none; }
+        .progress-info { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; color: #aaa; }
+        .progress-track { background-color: #3d3d3d; border-radius: 4px; overflow: hidden; height: 24px; position: relative; }
+        .progress-bar { height: 100%; background-color: var(--accent-color); width: 0%; transition: width 0.3s; display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; color: #fff; font-size: 12px; font-weight: bold; white-space: nowrap; overflow: hidden; }
+        
+        .status-panel { background-color: var(--panel-bg); border: 1px solid var(--accent-color); padding: 20px; border-radius: 8px; margin-bottom: 20px; min-height: 120px; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+        .status-title { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+        .status-main { font-size: 24px; font-weight: bold; color: var(--accent-color); margin-bottom: 10px; word-break: break-all; }
+        .status-sub { font-size: 16px; color: #ddd; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .log-console { background-color: #000; color: #0f0; font-family: 'Courier New', monospace; padding: 10px; height: 200px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 4px; font-size: 12px; margin-top: 10px; }
+        .log-entry { margin-bottom: 4px; border-bottom: 1px solid #111; }
+        .log-error { color: #ff5555; }
+        .log-success { color: #55ff55; }
+
+        .row { display: flex; gap: 20px; }
+        @media (max-width: 768px) { .row { flex-direction: column; } }
+        .col { flex: 1; }
+
+        .api-info { font-size: 11px; color: #666; margin-top: 2px; }
+        .config-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Kohaku 模型管理器 v3.0</h1>
+
+    <!-- 实时状态面板 -->
+    <div class="status-panel" id="statusPanel">
+        <div class="status-title">系统状态</div>
+        <div class="status-main" id="statusMain">空闲</div>
+        <div class="status-sub" id="statusSub">准备就绪</div>
+    </div>
+
+    <!-- 配置区域 -->
+    <div class="card">
+        <h2>系统配置</h2>
+        <div class="form-group">
+            <label>KohakuHub API 基础URL</label>
+            <input type="text" id="kohakuApiUrl" value="http://192.168.2.80:28080" placeholder="例如: http://192.168.2.80:28080">
+            <div class="api-info">Web 服务端口，与 Python huggingface-cli 保持一致</div>
+        </div>
+        <div class="form-group">
+            <label>API Token</label>
+            <input type="text" id="kohakuToken" value="00fac1565440f8d5dfe175927f3bfc69825cb295ebcf8d3d780503e6056f7f13" placeholder="输入 Token...">
+            <div class="api-info">用于上传到 KohakuHub 的认证 Token</div>
+        </div>
+        
+        <!-- 新增：LFS 配置 -->
+        <div class="form-group">
+            <label>LFS 阈值配置 (Byte)</label>
+            <div class="config-grid">
+                <div>
+                    <label title="大于此值走LFS，而非Base64内联">LFS 阈值</label>
+                    <input type="number" id="kohakuLfsThresholdBytes" value="10000000">
+                </div>
+                <div>
+                    <label title="大于此值启用分片上传">分片阈值</label>
+                    <input type="number" id="kohakuMultipartThresholdBytes" value="100000000">
+                </div>
+                <div>
+                    <label title="分片大小">分片大小</label>
+                    <input type="number" id="kohakuMultipartChunkSizeBytes" value="50000000">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- 下载区域 -->
+        <div class="col card">
+            <h2>从 ModelScope 下载</h2>
+            <div class="form-group">
+                <label>模型名称 (ModelScope格式)</label>
+                <input type="text" id="msModelName" value="Qwen/Qwen2.5-0.5B-Instruct" placeholder="例如: Qwen/Qwen2.5-0.5B-Instruct">
+            </div>
+            <button onclick="startDownload()">开始下载</button>
+            
+            <div class="progress-wrapper" id="dlProgressBox">
+                <div class="progress-info">
+                    <span id="dlCurrentFile">准备中...</span>
+                    <span id="dlPercent">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-bar" id="dlProgressBar">0%</div>
+                </div>
+            </div>
+            <div id="dlStatus" style="margin-top:5px; font-size:14px; color: #888;"></div>
+        </div>
+
+        <!-- 上传区域 -->
+        <div class="col card">
+            <h2>上传到 KohakuHub</h2>
+            <div class="form-group">
+                <label>选择本地缓存模型</label>
+                <select id="localModelSelect">
+                    <option value="">加载中...</option>
+                </select>
+            </div>
+            
+            <!-- 新增：自动识别 Repo ID -->
+            <div class="form-group">
+                <label>KohakuHub 仓库 ID (Repo ID)</label>
+                <input type="text" id="kohakuRepoId" placeholder="例如: Qwen/Qwen2.5-0.5B-Instruct" style="border-color: var(--accent-color);">
+                <div class="api-info" style="color:var(--accent-color)">根据本地目录自动转换，可手动修改</div>
+            </div>
+
+            <button onclick="startUpload()">开始上传</button>
+
+            <div class="progress-wrapper" id="ulProgressBox">
+                <div class="progress-info">
+                    <span id="ulCurrentFile">准备中...</span>
+                    <span id="ulPercent">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-bar" id="ulProgressBar">0%</div>
+                </div>
+            </div>
+            <div id="ulStatus" style="margin-top:5px; font-size:14px; color: #888;"></div>
+        </div>
+    </div>
+
+    <!-- 日志区域 -->
+    <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h2>系统日志</h2>
+            <button onclick="clearLogs()" style="width:auto; padding: 5px 15px; font-size:12px; background-color:#444;">清空日志</button>
+        </div>
+        <div class="log-console" id="logConsole"></div>
+    </div>
+</div>
+
+<script>
+    let currentTasks = {}; 
+    let refreshModelsInterval;
+    const API_BASE = '/api';
+
+    document.addEventListener('DOMContentLoaded', () => {
+        setInterval(checkTasks, 1000);
+        loadLocalModels();
+        refreshModelsInterval = setInterval(loadLocalModels, 10000);
+        
+        // 恢复保存的设置
+        const savedUrl = localStorage.getItem('kohakuApiUrl');
+        if(savedUrl) document.getElementById('kohakuApiUrl').value = savedUrl;
+        
+        const savedToken = localStorage.getItem('kohakuToken');
+        if(savedToken) document.getElementById('kohakuToken').value = savedToken;
+        
+        ['kohakuLfsThresholdBytes', 'kohakuMultipartThresholdBytes', 'kohakuMultipartChunkSizeBytes'].forEach(id => {
+            const val = localStorage.getItem(id);
+            if(val) document.getElementById(id).value = val;
+        });
+
+        // 监听 Repo ID 变化，清空缓存避免下次选择同一目录时不自动更新
+        document.getElementById('localModelSelect').addEventListener('change', function() {
+             document.getElementById('kohakuRepoId').value = ''; 
+        });
+    });
+
+    // 自动监听配置保存
+    ['kohakuApiUrl', 'kohakuToken', 'kohakuLfsThresholdBytes', 'kohakuMultipartThresholdBytes', 'kohakuMultipartChunkSizeBytes'].forEach(id => {
+        document.getElementById(id).addEventListener('change', function() {
+            localStorage.setItem(id, this.value);
+        });
+    });
+
+    function log(message, type = 'INFO') {
+        const consoleEl = document.getElementById('logConsole');
+        const entry = document.createElement('div');
+        entry.className = 'log-entry';
+        if (type === 'ERROR') entry.className += ' log-error';
+        if (type === 'SUCCESS') entry.className += ' log-success';
+        
+        const time = new Date().toLocaleTimeString();
+        entry.innerText = `[${time}] [${type}] ${message}`;
+        consoleEl.appendChild(entry);
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function clearLogs() {
+        document.getElementById('logConsole').innerHTML = '';
+    }
+
+    function updateStatusPanel(title, subTitle) {
+        document.getElementById('statusMain').innerText = title;
+        document.getElementById('statusSub').innerText = subTitle;
+        if (title === '空闲' || title === '完成') {
+            document.querySelector('.status-panel').style.borderColor = '#444';
+            document.getElementById('statusMain').style.color = '#888';
+        } else {
+            document.querySelector('.status-panel').style.borderColor = 'var(--accent-color)';
+            document.getElementById('statusMain').style.color = 'var(--accent-color)';
+        }
+    }
+
+    // 核心：将本地名 Qwen_Qwen2.5... 转换为 Hub 名 Qwen/Qwen2.5...
+    function toRepoId(localModelName) {
+        const parts = localModelName.split('_');
+        if (parts.length >= 2) {
+            // 仅替换第一个下划线为斜杠
+            return parts[0] + '/' + parts.slice(1).join('_');
+        }
+        // 如果没有下划线，则保持原样，用户需手动修改
+        return localModelName;
+    }
+
+    async function startDownload() {
+        const modelName = document.getElementById('msModelName').value.trim();
+        if (!modelName) return alert('请输入模型名称');
+
+        log(`启动下载任务: ${modelName}`);
+        updateStatusPanel('下载中', modelName);
+        
+        try {
+            const res = await fetch(`${API_BASE}/download/start`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ modelName })
+            });
+            
+            if (res.ok) {
+                const data = await res.json();
+                currentTasks[data.taskId] = { type: 'DOWNLOAD', uiId: 'dl', completed: false, model: modelName };
+                log(`下载任务已启动，ID: ${data.taskId}`);
+            } else {
+                throw new Error('下载启动失败');
+            }
+        } catch (error) {
+            log(error.message, 'ERROR');
+            alert('下载启动失败: ' + error.message);
+            updateStatusPanel('空闲', '就绪');
+        }
+    }
+
+    async function loadLocalModels() {
+        try {
+            const res = await fetch(`${API_BASE}/models/local`);
+            if (res.ok) {
+                const models = await res.json();
+                const select = document.getElementById('localModelSelect');
+                const currentVal = select.value;
+                select.innerHTML = '';
+                
+                if(models.length === 0) {
+                    select.innerHTML = '<option value="">暂无缓存模型</option>';
+                } else {
+                    models.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m;
+                        opt.innerText = m;
+                        select.appendChild(opt);
+                    });
+                    
+                    if(models.includes(currentVal)) select.value = currentVal;
+                }
+            }
+        } catch (error) {}
+    }
+
+    async function startUpload() {
+        const localModelName = document.getElementById('localModelSelect').value;
+        if (!localModelName) return alert('请选择模型');
+
+        // 自动填充 Repo ID (如果用户没手动改过)
+        const repoIdInput = document.getElementById('kohakuRepoId');
+        if (!repoIdInput.value) {
+            repoIdInput.value = toRepoId(localModelName);
+        }
+        
+        const repoId = repoIdInput.value.trim();
+        if (!repoId) return alert('请填写 KohakuHub 仓库 ID (Repo ID)');
+
+        const apiBaseUrl = document.getElementById('kohakuApiUrl').value.trim();
+        const token = document.getElementById('kohakuToken').value.trim();
+        if (!apiBaseUrl || !token) return alert('请填写完整 API 配置');
+
+        const lfsThresholdBytes = Number(document.getElementById('kohakuLfsThresholdBytes').value) || 10000000;
+        const multipartThresholdBytes = Number(document.getElementById('kohakuMultipartThresholdBytes').value) || 100000000;
+        const chunkSizeBytes = Number(document.getElementById('kohakuMultipartChunkSizeBytes').value) || 50000000;
+
+        log(`启动上传任务: ${localModelName} -> ${repoId}`);
+        updateStatusPanel('上传中', repoId);
+
+        try {
+            const res = await fetch(`${API_BASE}/upload/start`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ 
+                    modelName: localModelName,
+                    repoId: repoId,
+                    apiUrl: apiBaseUrl,
+                    token: token,
+                    lfsThresholdBytes,
+                    multipartThresholdBytes,
+                    chunkSizeBytes
+                })
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                currentTasks[data.taskId] = { type: 'UPLOAD', uiId: 'ul', completed: false, model: localModelName };
+                log(`上传任务已启动，ID: ${data.taskId}`);
+            } else {
+                throw new Error('上传启动失败');
+            }
+        } catch (error) {
+            log(error.message, 'ERROR');
+            alert('上传启动失败: ' + error.message);
+            updateStatusPanel('空闲', '就绪');
+        }
+    }
+
+    async function checkTasks() {
+        try {
+            const res = await fetch(`${API_BASE}/tasks`);
+            if (!res.ok) return;
+
+            const tasks = await res.json();
+            let activeTaskFound = false;
+
+            for (const [id, task] of Object.entries(tasks)) {
+                if (!currentTasks[id]) {
+                    currentTasks[id] = { type: task.type, uiId: task.type === 'UPLOAD' ? 'ul' : 'dl', completed: false, model: task.modelName };
+                }
+
+                let uiId = currentTasks[id].uiId;
+                let bar = document.getElementById(`${uiId}ProgressBar`);
+                let box = document.getElementById(`${uiId}ProgressBox`);
+                let statusText = document.getElementById(`${uiId}Status`);
+                let fileText = document.getElementById(`${uiId}CurrentFile`);
+                let percentText = document.getElementById(`${uiId}Percent`);
+
+                if (task.status === 'RUNNING' || task.status === 'COMPLETED' || task.status === 'ERROR') {
+                    box.style.display = 'block';
+                    bar.style.width = `${task.progress}%`;
+                    bar.innerText = `${task.progress}%`;
+                    percentText.innerText = `${task.progress}%`;
+                    
+                    if (task.currentFile) {
+                        fileText.innerText = `正在处理: ${task.currentFile}`;
+                    } else {
+                        fileText.innerText = task.message;
+                    }
+
+                    activeTaskFound = true;
+                    updateStatusPanel(task.status === 'COMPLETED' ? '完成' : '运行中', 
+                                     `${currentTasks[id].type}: ${task.currentFile || '准备中...'}`);
+                    
+                    if (task.status === 'ERROR') {
+                        bar.style.backgroundColor = 'var(--danger-color)';
+                        statusText.innerText = "错误: " + task.message;
+                        if (!currentTasks[id].loggedError) {
+                            log(`${task.type} 失败: ${task.message}`, 'ERROR');
+                            currentTasks[id].loggedError = true;
+                        }
+                    } else if (task.status === 'COMPLETED') {
+                        bar.style.backgroundColor = '#2196F3';
+                        statusText.innerText = "完成";
+                        if (!currentTasks[id].completed) {
+                            log(`${task.type} 完成: ${task.message}`, 'SUCCESS');
+                            currentTasks[id].completed = true;
+                        }
+                    }
+                }
+            }
+
+        } catch (error) {}
+    }
+</script>
+
+</body>
+</html>
